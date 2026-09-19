@@ -1,0 +1,54 @@
+name: run
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: How long this run works before handing over
+        default: "3300"
+  schedule:
+    - cron: "17 */6 * * *"
+
+concurrency:
+  group: run
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.SOURCE_REPO }}
+          ssh-key: ${{ secrets.SOURCE_KEY }}
+          path: src
+      - run: |
+          git -C src config user.name runner
+          git -C src config user.email runner@users.noreply.github.com
+          python3 src/run.py --selftest
+      - env:
+          ORIGIN: ${{ secrets.ORIGIN }}
+          PROJECT_ID: ${{ secrets.PROJECT_ID }}
+          PROJECT_KEY: ${{ secrets.PROJECT_KEY }}
+          SESSION: ${{ secrets.SESSION }}
+          FILES_DIR: src/zips
+          LEDGER: src/state.json
+          INTERVAL: "5-10"
+          FORWARD: "1"
+          REFRESH_CMD: git -C src pull -q --rebase
+          RECORD_CMD: git -C src add state.json && git -C src commit -qm state && git -C src pull -q --rebase && git -C src push -q
+          GH_TOKEN: ${{ github.token }}
+          SECONDS_INPUT: ${{ inputs.seconds }}
+        run: |
+          rc=0
+          python3 -u src/run.py --max-seconds "${SECONDS_INPUT:-3300}" || rc=$?
+          if [ "$rc" -eq 75 ]; then
+            gh workflow run run.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+            exit 0
+          fi
+          exit "$rc"
