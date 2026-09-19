@@ -7,7 +7,7 @@ on:
         description: How long this run works before handing over
         default: "3300"
   schedule:
-    - cron: "17 */6 * * *"
+    - cron: "*/30 * * * *"
 
 concurrency:
   group: run
@@ -39,6 +39,7 @@ jobs:
           FILES_DIR: src/zips
           LEDGER: src/state.json
           INTERVAL: "5-10"
+          IDLE_INTERVAL: "60"
           FORWARD: "1"
           REFRESH_CMD: git -C src pull -q --rebase
           RECORD_CMD: git -C src add state.json && git -C src commit -qm state && git -C src pull -q --rebase && git -C src push -q
