@@ -1,5 +1,15 @@
 name: run
 
+# A run only exists when there is a reason for one, and ends as soon as there is not.
+#
+# What this avoids, having done each of them before:
+#   * camping. A run used to hold a runner for 55 minutes polling a closed service. Now the
+#     script leaves the moment nothing is in flight, so an idle check costs about half a minute.
+#   * queue eviction. Dispatching while a run was live left the queued one to be cancelled by the
+#     next dispatch: 27 cancelled runs in eight hours. Nothing dispatches now except a run handing
+#     over to its successor, and a scheduled run steps aside when one is already working.
+#   * pushing at a closed door. An administrative pause used to be retried every 60 s for the life
+#     of the run; the script now leaves and lets the schedule look again later.
 on:
   workflow_dispatch:
     inputs:
@@ -7,11 +17,9 @@ on:
         description: How long this run works before handing over
         default: "3300"
   schedule:
-    - cron: "*/30 * * * *"
-
-concurrency:
-  group: run
-  cancel-in-progress: false
+    # Quarter-hourly is the heartbeat for noticing work; a run that finds any switches to
+    # polling every few seconds by itself, which is the only cadence that matters in a race.
+    - cron: "*/15 * * * *"
 
 permissions:
   contents: read
@@ -22,16 +30,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 65
     steps:
+      # No `concurrency:` group here on purpose. It serialises by queueing, and a queued run is
+      # what gets cancelled when another arrives. Standing aside is the same guarantee without
+      # the cancelled runs, and the hand-over chain still gets through because only the schedule
+      # defers. Two overlapping runs would still be safe: the ledger and the check taken
+      # immediately before each transfer are what actually prevent a repeat.
+      - name: stand aside if one is already working
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          live=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow run.yml --status in_progress \
+                   --json databaseId -q "[.[] | select(.databaseId != ${{ github.run_id }})] | length")
+          if [ "${live:-0}" != "0" ]; then
+            echo "another run is working; nothing to do here"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+
       - uses: actions/checkout@v4
+        if: env.SKIP != '1'
         with:
           repository: ${{ secrets.SOURCE_REPO }}
           ssh-key: ${{ secrets.SOURCE_KEY }}
           path: src
-      - run: |
+
+      - name: self-test
+        if: env.SKIP != '1'
+        run: |
           git -C src config user.name runner
           git -C src config user.email runner@users.noreply.github.com
           python3 src/run.py --selftest
-      - env:
+
+      - name: work
+        if: env.SKIP != '1'
+        env:
           ORIGIN: ${{ secrets.ORIGIN }}
           PROJECT_ID: ${{ secrets.PROJECT_ID }}
           PROJECT_KEY: ${{ secrets.PROJECT_KEY }}
@@ -48,6 +80,8 @@ jobs:
         run: |
           rc=0
           python3 -u src/run.py --max-seconds "${SECONDS_INPUT:-3300}" || rc=$?
+          # 75 alone means work was still in flight when the clock ran out: hand over. Every other
+          # code, 0 included, means there is nothing to carry on with, so the chain ends here.
           if [ "$rc" -eq 75 ]; then
             gh workflow run run.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
             exit 0
