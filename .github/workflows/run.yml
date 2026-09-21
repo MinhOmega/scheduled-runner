@@ -19,7 +19,9 @@ on:
   schedule:
     # Quarter-hourly is the heartbeat for noticing work; a run that finds any switches to
     # polling every few seconds by itself, which is the only cadence that matters in a race.
-    - cron: "*/15 * * * *"
+    # Offset off the hour: the top of the hour is when the scheduler is busiest and a run there
+    # is the most likely to be dropped or run late.
+    - cron: "7,22,37,52 * * * *"
 
 permissions:
   contents: read
