@@ -72,6 +72,8 @@ jobs:
           LEDGER: src/state.json
           INTERVAL: "5-10"
           IDLE_INTERVAL: "60"
+          # space one transfer from the next, rather than sending a burst four seconds apart
+          UPLOAD_GAP: "10-20"
           FORWARD: "1"
           REFRESH_CMD: git -C src pull -q --rebase
           RECORD_CMD: git -C src add state.json && git -C src commit -qm state && git -C src pull -q --rebase && git -C src push -q
